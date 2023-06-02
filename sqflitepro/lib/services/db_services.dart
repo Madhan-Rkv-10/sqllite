@@ -1,4 +1,6 @@
 // ignore_for_file: public_member_api_docs, sort_constructors_first
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -8,6 +10,15 @@ import 'crud_exceptions.dart';
 
 class NotesService {
   Database? _db;
+  List<DataBaseNotes> _notes = [];
+  final _notesStreamController =
+      StreamController<List<DataBaseNotes>>.broadcast();
+  Future<void> _cacheNotes() async {
+    final allNotes = await getAllNotes();
+    _notes = allNotes.toList();
+    _notesStreamController.add(_notes);
+  }
+
   Future<DataBaseNotes> updateNote(
       {required DataBaseNotes note, required String text}) async {
     final db = _getDataBaseThow();
@@ -19,6 +30,10 @@ class NotesService {
     if (updatedCount == 0) {
       throw CouldNotUpdateNote();
     } else {
+      final updatedNote = await getNote(id: note.id);
+      _notes.removeWhere((element) => element.id == note.id);
+      _notes.add(updatedNote);
+      _notesStreamController.add(_notes);
       return await getNote(id: note.id);
     }
   }
@@ -36,12 +51,22 @@ class NotesService {
 
   Future<DataBaseNotes> getNote({required int id}) async {
     final db = _getDataBaseThow();
-    final notes =
-        await db.query(noteTable, limit: 1, where: 'id= ?', whereArgs: [id]);
+    final notes = await db.query(
+      noteTable,
+      limit: 1,
+      where: 'id= ?',
+      whereArgs: [id],
+    );
     if (notes.isEmpty) {
       throw CouldNotFindNote();
     } else {
-      return DataBaseNotes.fromRow(notes.first);
+      final note = DataBaseNotes.fromRow(notes.first);
+
+      ///removie existing notes
+      _notes.removeWhere((element) => element.id == id);
+      _notes.add(note);
+      _notesStreamController.add(_notes);
+      return note;
     }
   }
 
@@ -50,7 +75,8 @@ class NotesService {
 
     ///Delte Entire Row from the table
     final deletedCount = await db.delete(noteTable);
-
+    _notes = [];
+    _notesStreamController.add(_notes);
     return deletedCount;
   }
 
@@ -60,6 +86,9 @@ class NotesService {
         await db.delete(noteTable, where: 'id=?', whereArgs: [id]);
     if (deletedCount == 0) {
       throw CouldNotDeleteNote();
+    } else {
+      _notes.removeWhere((element) => element.id == id);
+      _notesStreamController.add(_notes);
     }
   }
 
@@ -86,6 +115,8 @@ class NotesService {
       text: text,
       isSyncedWithServer: true,
     );
+    _notes.add(note);
+    _notesStreamController.add(_notes);
     return note;
   }
 
@@ -169,11 +200,16 @@ class NotesService {
       final dbPath = join(docsPath.path, dbName);
       final db = await openDatabase(dbPath);
       _db = db;
-//create user table
+
+      ///create user table
       await db.execute(QueryConstants.createUserTable);
-//create notes table
+
+      ///create notes table
 
       await db.execute(QueryConstants.createNotesTable);
+
+      /// cache all Notes
+      await _cacheNotes();
     } on MissingPlatformDirectoryException {
       throw UnableTogetDocumnetDirectory;
     }
